@@ -3,6 +3,7 @@ set -u
 
 BASE="${BASE:-/root/wiiu-drc}"
 AP_IF="${AP_IF:-ap0}"
+CHANNEL="${CHANNEL:-48}"
 OFFSET="${DRC_TSF_BOOTTIME_OFFSET_US:-}"
 INTERVAL="${INTERVAL:-10}"
 START_DESKTOP="${START_DESKTOP:-1}"
@@ -34,6 +35,11 @@ station_mac() {
     awk '/^Station / { print $2; exit }'
 }
 
+ap_healthy() {
+  timeout 3 iw dev "${AP_IF}" info 2>/dev/null | grep -q 'type AP' &&
+    ip -br addr show "${AP_IF}" 2>/dev/null | grep -q 'UP'
+}
+
 while true; do
   live_offset="$(current_stream_offset || true)"
   if [[ -n "${live_offset}" ]]; then
@@ -45,6 +51,10 @@ while true; do
      ! pgrep -x Xtigervnc >/dev/null 2>&1; then
     mac="$(station_mac || true)"
     if [[ -z "${mac}" ]]; then
+      if ! ap_healthy; then
+        log "stream process missing and AP is unhealthy; restarting AP"
+        CHANNEL="${CHANNEL}" "${BASE}/restart_wiiu_ap_keepalive.sh" || true
+      fi
       log "stream process missing but no GamePad station is associated; waiting"
       sleep "${INTERVAL}"
       continue
