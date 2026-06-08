@@ -146,6 +146,22 @@ index c1fc5c2..0e2c088 100644
 +  return true;
 +}
 +
++bool GetEnvS64(const char* name, s64* out) {
++  const char* value = getenv(name);
++  if (value == NULL || value[0] == '\0') {
++    return false;
++  }
++
++  char* end = NULL;
++  long long parsed = strtoll(value, &end, 10);
++  if (end == value || *end != '\0') {
++    return false;
++  }
++
++  *out = static_cast<s64>(parsed);
++  return true;
++}
++
 +bool FindIwlmvmTimediffPath(const std::string& drc_if, std::string* out) {
 +  glob_t globbuf;
 +  memset(&globbuf, 0, sizeof (globbuf));
@@ -231,12 +247,12 @@ index c1fc5c2..0e2c088 100644
 +  static bool use_boottime_offset_tsf = false;
 +  static bool use_iwlmvm_tsf = false;
 +  static bool use_relative_tsf = false;
-+  static u64 boottime_offset_us = 0;
++  static s64 boottime_offset_us = 0;
 +  static u64 relative_base = 0;
 +
 +  if (!env_checked) {
 +    use_boottime_offset_tsf =
-+        GetEnvU64("DRC_TSF_BOOTTIME_OFFSET_US", &boottime_offset_us);
++        GetEnvS64("DRC_TSF_BOOTTIME_OFFSET_US", &boottime_offset_us);
 +    use_iwlmvm_tsf = EnvFlagEnabled("DRC_TSF_IWLMVM");
 +    use_relative_tsf = EnvFlagEnabled("DRC_TSF_RELATIVE");
 +    if (use_relative_tsf) {
@@ -248,8 +264,13 @@ index c1fc5c2..0e2c088 100644
 +  if (use_boottime_offset_tsf) {
 +    u64 boottime_us;
 +    GetBoottimeUs(&boottime_us);
-+    if (boottime_us >= boottime_offset_us) {
-+      *tsf = boottime_us - boottime_offset_us;
++    if (boottime_offset_us < 0) {
++      *tsf = boottime_us + static_cast<u64>(-boottime_offset_us);
++      return 0;
++    }
++    u64 positive_offset = static_cast<u64>(boottime_offset_us);
++    if (boottime_us >= positive_offset) {
++      *tsf = boottime_us - positive_offset;
 +      return 0;
 +    }
 +  }

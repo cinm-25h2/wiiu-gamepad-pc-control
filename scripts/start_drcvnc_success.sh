@@ -2,12 +2,15 @@
 set -euo pipefail
 
 BASE="${BASE:-/root/wiiu-drc}"
+AP_IF="${AP_IF:-ap0}"
 PAD_IP="${PAD_IP:-192.168.1.11}"
 DISPLAY_NUM="${DISPLAY_NUM:-1}"
 VNC_GEOMETRY="${VNC_GEOMETRY:-864x480}"
 START_DESKTOP="${START_DESKTOP:-0}"
 START_XEV="${START_XEV:-0}"
 OPEN_FILE_MANAGER="${OPEN_FILE_MANAGER:-0}"
+REQUIRE_STATION="${REQUIRE_STATION:-1}"
+WAIT_FOR_STATION="${WAIT_FOR_STATION:-30}"
 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-${BASE}/xdg-runtime-root}"
 
 log() {
@@ -25,6 +28,11 @@ current_stream_offset() {
     tail -n 1
 }
 
+station_mac() {
+  timeout 3 iw dev "${AP_IF}" station dump 2>/dev/null |
+    awk '/^Station / { print $2; exit }'
+}
+
 offset="${DRC_TSF_BOOTTIME_OFFSET_US:-}"
 if [[ -z "${offset}" ]]; then
   offset="$(current_stream_offset || true)"
@@ -38,6 +46,24 @@ if [[ -z "${offset}" ]]; then
   exit 1
 fi
 printf '%s\n' "${offset}" > "${BASE}/last_tsf_offset.conf"
+
+if [[ "${REQUIRE_STATION}" = "1" ]]; then
+  log "checking for GamePad station on ${AP_IF}"
+  mac=""
+  for ((i = 0; i < WAIT_FOR_STATION; i++)); do
+    mac="$(station_mac || true)"
+    if [[ -n "${mac}" ]]; then
+      log "GamePad station ${mac} is associated"
+      break
+    fi
+    sleep 1
+  done
+  if [[ -z "${mac}" ]]; then
+    log "no GamePad station associated with ${AP_IF}; not starting VNC stream"
+    log "run ${BASE}/restart_wiiu_ap_keepalive.sh and power-cycle the GamePad"
+    exit 1
+  fi
+fi
 
 mkdir -p "${XDG_RUNTIME_DIR}"
 chmod 700 "${XDG_RUNTIME_DIR}"
@@ -133,5 +159,13 @@ nohup ./drcvncclient ":${DISPLAY_NUM}" > "${BASE}/drcvncclient.log" 2>&1 &
 echo $! > "${BASE}/drcvncclient.pid"
 
 sleep 3
-pgrep -a drcvncclient || true
+if ! pgrep -a drcvncclient; then
+  log "drcvncclient did not stay running"
+  tail -n 80 "${BASE}/drcvncclient.log" || true
+  exit 1
+fi
 tail -n 80 "${BASE}/drcvncclient.log" || true
+if grep -qi "Unable to start streamer" "${BASE}/drcvncclient.log"; then
+  log "drcvncclient reported streamer startup failure"
+  exit 1
+fi

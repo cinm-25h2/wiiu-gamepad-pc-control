@@ -12,12 +12,14 @@ This repository is a practical wrapper around a working Ubuntu Live setup. It as
 - Switch to another GamePad already paired to the same Wii U credentials.
 - Optional touch-coordinate debug logging.
 - Experimental PC-hosted WPS pairing attempt for removing the Wii U console from the daily workflow.
+- Hardened AP restart flow for Ubuntu 24.04/Intel Wi-Fi experiments.
 
 ## Security Notes
 
 - The GUI creates a random token in `/root/wiiu-drc/gui-token`.
 - The token value is not printed by `start_gui.sh` or the Python service.
-- The top page and API both require `?token=<token>`.
+- Open the GUI once with `?token=<token>`. The service then stores an HTTP-only cookie and redirects back to `/` so the token is no longer kept in the URL.
+- The top page and API both require either the token URL or that cookie.
 - Task output is masked for common secret patterns such as `token=...`, `psk=...`, `wpa_psk=...`, `GH_TOKEN=...`, and `GITHUB_TOKEN=...`.
 - Do not expose the GUI port to an untrusted network.
 - Real AP credentials such as `get_psk.conf` are intentionally ignored by `.gitignore`.
@@ -53,14 +55,14 @@ http://<ubuntu-host-ip>:8765/?token=<token>
 
 ## GUI Controls
 
-- `Stream Desktop ON`: start Openbox/LXPanel/PCManFM desktop mode on the GamePad.
-- `Run Screen Test`: start the libdrc screen test profile.
-- `AP ON`: restart only the Wii U DRC AP.
-- `Stream OFF`: stop VNC and `drcvncclient`.
-- `All OFF`: stop AP, VNC, and streaming.
+- `Start Desktop`: restart the Wii U DRC AP, wait for the GamePad, measure TSF, then start Openbox/LXPanel/PCManFM desktop mode.
+- `Screen Test`: restart the AP, wait for the GamePad, measure TSF, then start the libdrc `pad_probe` test profile.
+- `Restart AP`: restart only the Wii U DRC AP and DHCP service.
+- `Stop Stream`: stop VNC and `drcvncclient` while leaving the AP running.
+- `Power Off`: stop AP, VNC, and streaming.
 - `Switch GamePad`: wait for another already-paired GamePad and save its MAC.
 - `Watchdog ON/OFF`: enable or disable stream monitoring.
-- `Touch Debug ON`: restart desktop mode with touch coordinate logs.
+- `Touch Debug`: restart desktop mode with touch coordinate logs.
 - `Experimental Direct Pair`: start a Wii U-like WPS pairing AP and show the symbol code to enter on the GamePad.
 
 ## CLI Scripts
@@ -70,11 +72,15 @@ The GUI calls the scripts installed under `/root/wiiu-drc/`:
 ```bash
 /root/wiiu-drc/wiiu_gamepad_status.sh
 /root/wiiu-drc/restart_wiiu_ap_keepalive.sh
-START_DESKTOP=1 /root/wiiu-drc/start_drcvnc_success.sh
 /root/wiiu-drc/run_wiiu_gamepad_screen_success.sh
+START_DESKTOP=1 /root/wiiu-drc/start_drcvnc_success.sh
 /root/wiiu-drc/pair_or_switch_wiiu_gamepad.sh
 /root/wiiu-drc/watch_drcvnc_success.sh
 ```
+
+`start_drcvnc_success.sh` now refuses to start the stream if no GamePad station is associated with the AP. This avoids repeated `Unable to start streamer` loops when the GamePad is off or the AP did not come back cleanly.
+
+On Intel Wi-Fi, `restart_wiiu_ap_keepalive.sh` can also reconnect a parent STA from `/root/wiiu-drc/sta_parent.conf` before starting the 5 GHz AP. This keeps LAR/IR-concurrent behavior from silently producing an `AP-ENABLED` hostapd state with failed beacon setup.
 
 ## Experimental Direct Pairing
 
@@ -104,7 +110,7 @@ References:
 
 The `patches/` directory contains the working changes used during the Ubuntu 24.04 bring-up:
 
-- libdrc TSF override/fallback support.
+- libdrc signed TSF override/fallback support.
 - libdrc UDP media source-port binding.
 - Ubuntu 24.04 build fixes.
 - `drcvncclient` compatibility fixes for the current libdrc API.
@@ -120,5 +126,7 @@ DRC_GAMEPAD_IP=192.168.1.11
 DRC_BIND_MEDIA_SOURCE_PORTS=1
 DRC_TSF_BOOTTIME_OFFSET_US=<measured per AP run>
 ```
+
+The measured TSF offset may be negative on Intel concurrent STA/AP setups. The included libdrc patch accepts signed values for `DRC_TSF_BOOTTIME_OFFSET_US`.
 
 See `docs/quickstart_ubuntu24_wiiu_gamepad_pc.md` for the local quickstart notes.

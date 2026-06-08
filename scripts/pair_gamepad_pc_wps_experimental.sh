@@ -76,10 +76,11 @@ killall -9 drcvncclient pad_probe hostapd dnsmasq 2>/dev/null || true
 vncserver -kill :1 >/dev/null 2>&1 || true
 ip link set "${AP_IF}" down 2>/dev/null || true
 iw dev "${AP_IF}" del 2>/dev/null || true
+iw reg set JP 2>/dev/null || true
 iw dev "${PHY_IF}" interface add "${AP_IF}" type __ap 2>/dev/null || true
-ip link set "${AP_IF}" up
-ip addr flush dev "${AP_IF}" 2>/dev/null || true
-ip addr add "${AP_IP}" dev "${AP_IF}"
+if command -v nmcli >/dev/null 2>&1; then
+  nmcli dev set "${AP_IF}" managed no >/dev/null 2>&1 || true
+fi
 
 cat > "${CONF}" <<EOF_CONF
 interface=${AP_IF}
@@ -148,6 +149,9 @@ done
 grep -q "AP-ENABLED" "${BASE}/hostapd_pairing.log" ||
   fail "pairing AP did not start"
 
+ip addr flush dev "${AP_IF}" 2>/dev/null || true
+ip addr add "${AP_IP}" dev "${AP_IF}"
+
 "${HOSTAPD_CLI}" -i "${AP_IF}" wps_config "${NORMAL_SSID}" WPA2PSK CCMP "${NORMAL_PSK}" || true
 "${HOSTAPD_CLI}" -i "${AP_IF}" wps_pin any "${PIN}" "${PAIR_TIMEOUT}" || true
 
@@ -156,10 +160,10 @@ paired_mac=""
 deadline=$((SECONDS + PAIR_TIMEOUT))
 while (( SECONDS < deadline )); do
   if grep -q "WPS-SUCCESS\\|WPS:.*success\\|WPA: pairwise key handshake completed" "${BASE}/hostapd_pairing.log" 2>/dev/null; then
-    paired_mac="$(iw dev "${AP_IF}" station dump 2>/dev/null | awk '/^Station / { print $2; exit }')"
+    paired_mac="$(timeout 3 iw dev "${AP_IF}" station dump 2>/dev/null | awk '/^Station / { print $2; exit }')"
     break
   fi
-  paired_mac="$(iw dev "${AP_IF}" station dump 2>/dev/null | awk '/^Station / { print $2; exit }')"
+  paired_mac="$(timeout 3 iw dev "${AP_IF}" station dump 2>/dev/null | awk '/^Station / { print $2; exit }')"
   if [[ -n "${paired_mac}" ]] && grep -q "WPS" "${BASE}/hostapd_pairing.log" 2>/dev/null; then
     break
   fi

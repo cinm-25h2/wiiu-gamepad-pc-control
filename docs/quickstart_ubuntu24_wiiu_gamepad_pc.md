@@ -69,6 +69,8 @@ DRC_BIND_MEDIA_SOURCE_PORTS=1
 DRC_TSF_BOOTTIME_OFFSET_US=<measured per AP run>
 ```
 
+On Intel concurrent STA/AP runs, the measured TSF offset can be negative. Use the included signed-offset libdrc patch before relying on that value.
+
 ## Key Fixes
 
 - Intel AX201 works here by keeping STA+AP concurrent on the same 5 GHz channel.

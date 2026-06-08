@@ -15,7 +15,7 @@ log() {
 }
 
 detect_station() {
-  iw dev "${AP_IF}" station dump 2>/dev/null |
+  timeout 3 iw dev "${AP_IF}" station dump 2>/dev/null |
     awk '/^Station / { print $2; exit }'
 }
 
