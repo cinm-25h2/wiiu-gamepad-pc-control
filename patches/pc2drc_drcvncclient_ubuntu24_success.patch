@@ -1,0 +1,189 @@
+diff --git a/libdrc-vnc/drcvncclient/src/Makefile.am b/libdrc-vnc/drcvncclient/src/Makefile.am
+index b303e05..efc7b90 100644
+--- a/libdrc-vnc/drcvncclient/src/Makefile.am
++++ b/libdrc-vnc/drcvncclient/src/Makefile.am
+@@ -1,6 +1,6 @@
+ AM_CXXFLAGS = $(sdl2_CFLAGS) $(libvncclient_CFLAGS) $(libdrc_CFLAGS) \
+               $(x264_CFLAGS)
+-LIBS += $(sdl2_LIBS) $(libvncclient_LIBS) $(libdrc_LIBS) $(x264_LIBS)
++LIBS += $(sdl2_LIBS) $(libvncclient_LIBS) $(libdrc_LIBS) $(x264_LIBS) -lswscale
+ 
+ bin_PROGRAMS = drcvncclient
+ drcvncclient_SOURCES = drcvncclient.cpp
+diff --git a/libdrc-vnc/drcvncclient/src/drcvncclient.cpp b/libdrc-vnc/drcvncclient/src/drcvncclient.cpp
+index a6f4135..e79f2a0 100644
+--- a/libdrc-vnc/drcvncclient/src/drcvncclient.cpp
++++ b/libdrc-vnc/drcvncclient/src/drcvncclient.cpp
+@@ -38,10 +38,14 @@
+ #include <SDL.h>
+ #include <signal.h>
+ 
++#include <algorithm>
++#include <cmath>
+ #include <map>
++#include <cstring>
++#include <cstdlib>
+ //#include <string>
+ //#include <sstream>
+-//#include <vector>
++#include <string>
+ 
+ #include <drc/input.h>
+ #include <drc/screen.h>
+@@ -82,8 +86,10 @@ namespace {
+ 
+ static rfbBool resize(rfbClient* client) {
+   //int width=client->width,height=client->height,
+-  int width=854,height=480,
+-    depth=client->format.bitsPerPixel;
++  int width = client->width > 0 ? client->width : drc::kScreenWidth;
++  int height = client->height > 0 ? client->height : drc::kScreenHeight;
++  int depth = client->format.bitsPerPixel;
++  (void)depth;
+ 
+   client->updateRect.x = client->updateRect.y = 0;
+   client->updateRect.w = width; client->updateRect.h = height;
+@@ -115,13 +121,11 @@ static rfbBool resize(rfbClient* client) {
+   SDL_PixelFormat *fmt = SDL_AllocFormat(SDL_PIXELFORMAT_ARGB8888);
+   
+ 
+-  uint8_t *pixels = static_cast<uint8_t*>
+-                      //(malloc(drc::kScreenWidth * drc::kScreenHeight *
+-                      (malloc(854 * drc::kScreenHeight *
+-                      fmt->BytesPerPixel));
++  uint8_t *pixels = static_cast<uint8_t*>(
++      malloc(width * height * fmt->BytesPerPixel));
+ 
+   SDL_RenderReadPixels(sdlRenderer, NULL, SDL_PIXELFORMAT_ARGB8888, pixels,
+-  854 * fmt->BytesPerPixel);
++                       width * fmt->BytesPerPixel);
+   //  drc::kScreenWidth * fmt->BytesPerPixel);
+   client->frameBuffer=pixels;
+ 
+@@ -374,14 +378,28 @@ static rfbBool handleSDLEvent(rfbClient *cl, SDL_Event *e)
+ }
+ 
+ void Init_DRC() {
+-  g_streamer = new drc::Streamer();
++  const char* gamepad_ip_env = std::getenv("DRC_GAMEPAD_IP");
++  const std::string gamepad_ip =
++      (gamepad_ip_env != nullptr && gamepad_ip_env[0] != '\0')
++          ? gamepad_ip_env
++          : "192.168.1.11";
++
++  g_streamer = new drc::Streamer(gamepad_ip + ":50120",
++                                 gamepad_ip + ":50121",
++                                 gamepad_ip + ":50123");
+ 
+   if (!g_streamer->Start()) {
+     puts("Unable to start streamer");
+     exit(1);
+   }
+-  g_streamer->SetFrameRate(drc::VideoFrameRate::k59_94Hz);
+-  //g_streamer->SetTSArea(864, 480);
++  g_streamer->SetTSArea(854, 480);
++
++  bool sync_ok = g_streamer->SyncUICConfig(true);
++  bool backlight_ok = g_streamer->SetLcdBacklight(4, true);
++  printf("DRC streamer target=%s SyncUICConfig=%s SetLcdBacklight=%s\n",
++         gamepad_ip.c_str(),
++         sync_ok ? "ok" : "failed",
++         backlight_ok ? "ok" : "failed");
+ }
+ 
+ void Quit_DRC() {
+@@ -405,10 +423,20 @@ void Push_DRC_Frame(rfbClient *cl) {
+ 
+   if (elapsedMS > frameWaitMS) {
+   // push frame to DRC
+-    std::vector<drc::u8> pixels((drc::u8*)cl->frameBuffer,
+-                                (drc::u8*)cl->frameBuffer +
+-                                //drc::kScreenWidth * drc::kScreenHeight * 4);
+-                                854 * drc::kScreenHeight * 4);
++    const int bytes_per_pixel = 4;
++    const int vnc_width = cl->width > 0 ? cl->width : drc::kScreenWidth;
++    const int vnc_height = cl->height > 0 ? cl->height : drc::kScreenHeight;
++    const int copy_width = std::min<int>(vnc_width, drc::kScreenWidth);
++    const int copy_height = std::min<int>(vnc_height, drc::kScreenHeight);
++    const drc::u8* src = static_cast<const drc::u8*>(cl->frameBuffer);
++    std::vector<drc::u8> pixels(drc::kScreenWidth * drc::kScreenHeight *
++                                bytes_per_pixel, 0);
++
++    for (int y = 0; y < copy_height; ++y) {
++      std::memcpy(pixels.data() + y * drc::kScreenWidth * bytes_per_pixel,
++                  src + y * vnc_width * bytes_per_pixel,
++                  copy_width * bytes_per_pixel);
++    }
+ 
+     /*std::vector<drc::s16> samples(48000 * 2);
+     for (int i = 0; i < 48000; ++i) {
+@@ -418,13 +446,18 @@ void Push_DRC_Frame(rfbClient *cl) {
+       samples[2 * i + 1] = samp;
+     }
+     g_streamer->PushAudSamples(samples);*/
+-    //g_streamer->PushVidFrame(&pixels, drc::kScreenWidth, drc::kScreenHeight,
+-    g_streamer->PushVidFrame(&pixels, 854, drc::kScreenHeight,
+-                             drc::PixelFormat::kBGRA);
++    g_streamer->PushVidFrame(&pixels, drc::kScreenWidth,
++                             drc::kScreenHeight, drc::PixelFormat::kBGRA);
+     //printf("boo");
+     //exit(1);
+     startMS = SDL_GetTicks();
+   }
++
++  static uint32_t sync_counter = 0;
++  if ((++sync_counter % 120) == 0) {
++    g_streamer->SyncUICConfig();
++    g_streamer->SetLcdBacklight(4);
++  }
+ }
+ 
+ void Process_DRC_Input(rfbClient *cl, drc::InputData& input_data) {
+@@ -451,7 +484,7 @@ void Process_DRC_Input(rfbClient *cl, drc::InputData& input_data) {
+     int selectbtn = input_data.buttons & drc::InputData::kBtnMinus;
+     int homebtn = input_data.buttons & drc::InputData::kBtnHome;
+     int tvbutton = input_data.buttons & drc::InputData::kBtnTV;
+-    int pwrbutton = input_data.buttons & drc::InputData::kBtnPower;
++    int pwrbutton = 0;
+     // A = enter  B = backspace  X = space  Y = Tab  TV = mode switch  Select = Copy  Start = Paste  Lhat = Larrow  Rhat = Rarrow  Home = Escape
+     // emulate mouse clicks with trigger buttons
+     if(tvbutton  != prev_tvbutton) {
+@@ -625,8 +658,36 @@ void Process_DRC_Input(rfbClient *cl, drc::InputData& input_data) {
+ 
+   // Handle touchscreen press
+   if (input_data.ts_pressed) {
+-    int x = (input_data.ts_x * 854) - 1;
+-    int y = (input_data.ts_y * 480) - 1;
++    const int pointer_width = cl->width > 0 ? cl->width : drc::kScreenWidth;
++    const int pointer_height = cl->height > 0 ? cl->height : drc::kScreenHeight;
++    float raw_x = input_data.ts_x;
++    float raw_y = input_data.ts_y;
++
++    if (!std::isfinite(raw_x)) raw_x = 0.0f;
++    if (!std::isfinite(raw_y)) raw_y = 0.0f;
++
++    float mapped_x = raw_x;
++    float mapped_y = raw_y;
++    if (raw_x >= -0.5f && raw_x <= 1.5f) {
++      mapped_x = raw_x * static_cast<float>(pointer_width - 1);
++    }
++    if (raw_y >= -0.5f && raw_y <= 1.5f) {
++      mapped_y = raw_y * static_cast<float>(pointer_height - 1);
++    }
++
++    int x = static_cast<int>(mapped_x + 0.5f);
++    int y = static_cast<int>(mapped_y + 0.5f);
++    x = std::max(0, std::min(pointer_width - 1, x));
++    y = std::max(0, std::min(pointer_height - 1, y));
++
++    static const bool touch_debug =
++        std::getenv("DRC_TOUCH_DEBUG") != nullptr &&
++        std::strcmp(std::getenv("DRC_TOUCH_DEBUG"), "0") != 0;
++    if (touch_debug) {
++      printf("touch raw=(%.3f,%.3f) mapped=(%d,%d) size=(%d,%d)\n",
++             raw_x, raw_y, x, y, pointer_width, pointer_height);
++      fflush(stdout);
++    }
+ 
+     if (x != prev_x || y != prev_y) {
+       SendPointerEvent(cl, x, y, buttonMask);

@@ -1,0 +1,42 @@
+# Python/runtime cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Runtime logs and process files
+*.log
+*.pid
+gui-logs/
+
+# Local secrets and generated Wii U/AP state
+gui-token
+get_psk.conf
+ap_values.env
+gamepad_mac.conf
+last_tsf_offset.conf
+wiiu_ap_keepalive.conf
+wiiu_ap_pc_pairing.conf
+hostapd*.log
+dnsmasq*.log
+*.pcap
+
+# Local SSH/auth material
+known_hosts
+*_ssh_key
+*_ssh_key.pub
+id_rsa*
+id_ed25519*
+
+# Archives/build outputs generated during experiments
+*.zip
+*.tar
+*.tar.gz
+*.o
+*.a
+*.so
