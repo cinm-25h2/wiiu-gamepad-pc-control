@@ -1,0 +1,488 @@
+diff --git a/include/drc/internal/astrm-packet.h b/include/drc/internal/astrm-packet.h
+index d28818e..28e48f8 100644
+--- a/include/drc/internal/astrm-packet.h
++++ b/include/drc/internal/astrm-packet.h
+@@ -26,6 +26,7 @@
+ 
+ #include <array>
+ #include <drc/types.h>
++#include <cstddef>
+ #include <vector>
+ 
+ namespace drc {
+diff --git a/include/drc/streamer.h b/include/drc/streamer.h
+index 85b5295..39a9997 100644
+--- a/include/drc/streamer.h
++++ b/include/drc/streamer.h
+@@ -27,6 +27,7 @@
+ #include <drc/input.h>
+ #include <drc/pixel-format.h>
+ #include <drc/types.h>
++#include <functional>
+ #include <memory>
+ #include <string>
+ #include <vector>
+diff --git a/src/audio-streamer.cpp b/src/audio-streamer.cpp
+index e13e1f8..224109f 100644
+--- a/src/audio-streamer.cpp
++++ b/src/audio-streamer.cpp
+@@ -23,6 +23,7 @@
+ // POSSIBILITY OF SUCH DAMAGE.
+ 
+ #include <deque>
++#include <cstdlib>
+ #include <drc/internal/astrm-packet.h>
+ #include <drc/internal/audio-streamer.h>
+ #include <drc/internal/events.h>
+@@ -53,6 +54,11 @@ s32 GetTimestamp() {
+   return static_cast<s32>(tsf & 0xFFFFFFFF);
+ }
+ 
++bool EnvFlagEnabled(const char* name) {
++  const char* value = getenv(name);
++  return value != NULL && value[0] != '\0' && value[0] != '0';
++}
++
+ }  // namespace
+ 
+ AudioStreamer::AudioStreamer(const std::string& dst)
+@@ -68,6 +74,9 @@ bool AudioStreamer::Start() {
+     Stop();
+     return false;
+   }
++  if (EnvFlagEnabled("DRC_DISABLE_AUDIO_STREAM")) {
++    return true;
++  }
+   StartEM();
+   return true;
+ }
+diff --git a/src/events.cpp b/src/events.cpp
+index 03769ed..d6d92e1 100644
+--- a/src/events.cpp
++++ b/src/events.cpp
+@@ -24,7 +24,9 @@
+ 
+ #include <array>
+ #include <cassert>
++#include <cerrno>
+ #include <cstring>
++#include <cstdio>
+ #include <drc/internal/events.h>
+ #include <drc/types.h>
+ #include <fcntl.h>
+@@ -137,10 +139,15 @@ void EventMachine::ProcessEvents() {
+       Event* evt = it->second.get();
+       if (evt->read_size) {
+         std::vector<byte> buffer(evt->read_size);
+-        if (read(evt->fd, buffer.data(), evt->read_size) != evt->read_size) {
++        ssize_t read_res = read(evt->fd, buffer.data(), evt->read_size);
++        if (read_res != evt->read_size) {
++          if (read_res == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
++            continue;
++          }
+           fprintf(stderr, "read failed - EventMachine::ProcessEvents:"
+                           "(fd:%d, size:%d): %s\n", evt->fd, evt->read_size,
+                           strerror(errno));
++          continue;
+         }
+       }
+ 
+diff --git a/src/tsf-linux.cpp b/src/tsf-linux.cpp
+index c1fc5c2..0e2c088 100644
+--- a/src/tsf-linux.cpp
++++ b/src/tsf-linux.cpp
+@@ -23,7 +23,12 @@
+ // POSSIBILITY OF SUCH DAMAGE.
+ 
+ #include <drc/types.h>
++#include <cerrno>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
+ #include <fcntl.h>
++#include <glob.h>
+ #include <ifaddrs.h>
+ #include <netdb.h>
+ #include <string>
+@@ -31,6 +36,7 @@
+ #include <sys/stat.h>
+ #include <sys/socket.h>
+ #include <net/if.h>
++#include <time.h>
+ #include <unistd.h>
+ 
+ namespace drc {
+@@ -70,10 +76,164 @@ int GetInterfaceOfIpv4(const std::string& addr, std::string* out) {
+   return rv;
+ }
+ 
++
++void GetMonotonicTsf(u64* tsf) {
++  struct timespec ts;
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  *tsf = static_cast<u64>(ts.tv_sec) * 1000000ULL +
++         static_cast<u64>(ts.tv_nsec) / 1000ULL;
++}
++
++void GetBoottimeUs(u64* tsf) {
++  struct timespec ts;
++  clock_gettime(CLOCK_BOOTTIME, &ts);
++  *tsf = static_cast<u64>(ts.tv_sec) * 1000000ULL +
++         static_cast<u64>(ts.tv_nsec) / 1000ULL;
++}
++
++bool EnvFlagEnabled(const char* name) {
++  const char* value = getenv(name);
++  return value != NULL && value[0] != '\0' && value[0] != '0';
++}
++
++bool GetEnvU64(const char* name, u64* out) {
++  const char* value = getenv(name);
++  if (value == NULL || value[0] == '\0') {
++    return false;
++  }
++
++  char* end = NULL;
++  unsigned long long parsed = strtoull(value, &end, 10);
++  if (end == value || *end != '\0') {
++    return false;
++  }
++
++  *out = static_cast<u64>(parsed);
++  return true;
++}
++
++bool GetEnvS64(const char* name, s64* out) {
++  const char* value = getenv(name);
++  if (value == NULL || value[0] == '\0') {
++    return false;
++  }
++
++  char* end = NULL;
++  long long parsed = strtoll(value, &end, 10);
++  if (end == value || *end != '\0') {
++    return false;
++  }
++
++  *out = static_cast<s64>(parsed);
++  return true;
++}
++
++bool FindIwlmvmTimediffPath(const std::string& drc_if, std::string* out) {
++  glob_t globbuf;
++  memset(&globbuf, 0, sizeof (globbuf));
++
++  std::string pattern = std::string("/sys/kernel/debug/ieee80211/phy*/netdev:")
++      + drc_if + "/iwlmvm/os_device_timediff";
++  int rv = glob(pattern.c_str(), 0, NULL, &globbuf);
++  if (rv == 0 && globbuf.gl_pathc > 0) {
++    *out = globbuf.gl_pathv[0];
++    globfree(&globbuf);
++    return true;
++  }
++
++  globfree(&globbuf);
++  return false;
++}
++
++bool ReadIwlmvmTimediff(const std::string& path, s64* diff) {
++  FILE* fp = fopen(path.c_str(), "r");
++  if (!fp) {
++    return false;
++  }
++
++  char buf[128];
++  bool ok = false;
++  if (fgets(buf, sizeof (buf), fp)) {
++    long long parsed = 0;
++    if (sscanf(buf, "diff=%lld", &parsed) == 1) {
++      *diff = parsed;
++      ok = true;
++    }
++  }
++
++  fclose(fp);
++  return ok;
++}
++
++bool GetIwlmvmDeviceTime(const std::string& drc_if, u64* tsf) {
++  static bool initialized = false;
++  static bool available = false;
++  static bool warned = false;
++  static std::string timediff_path;
++  static s64 os_device_diff = 0;
++  static u64 last_refresh_us = 0;
++
++  if (!initialized) {
++    available = FindIwlmvmTimediffPath(drc_if, &timediff_path);
++    initialized = true;
++  }
++  if (!available) {
++    return false;
++  }
++
++  u64 boottime_us;
++  GetBoottimeUs(&boottime_us);
++  if (last_refresh_us == 0 || boottime_us - last_refresh_us > 1000000ULL) {
++    if (!ReadIwlmvmTimediff(timediff_path, &os_device_diff)) {
++      if (!warned) {
++        fprintf(stderr, "failed to read iwlmvm timediff from %s: %s\n",
++                timediff_path.c_str(), strerror(errno));
++        warned = true;
++      }
++      return false;
++    }
++    last_refresh_us = boottime_us;
++  }
++
++  if (os_device_diff < 0) {
++    *tsf = boottime_us + static_cast<u64>(-os_device_diff);
++  } else if (boottime_us >= static_cast<u64>(os_device_diff)) {
++    *tsf = boottime_us - static_cast<u64>(os_device_diff);
++  } else {
++    return false;
++  }
++  return true;
++}
++
+ }  // namespace
+ 
+ int GetTsf(u64 *tsf) {
+   static int fd = -1;
++  static bool env_checked = false;
++  static bool use_boottime_offset_tsf = false;
++  static bool use_iwlmvm_tsf = false;
++  static bool use_relative_tsf = false;
++  static s64 boottime_offset_us = 0;
++  static u64 relative_base = 0;
++
++  if (!env_checked) {
++    use_boottime_offset_tsf =
++        GetEnvS64("DRC_TSF_BOOTTIME_OFFSET_US", &boottime_offset_us);
++    use_iwlmvm_tsf = EnvFlagEnabled("DRC_TSF_IWLMVM");
++    use_relative_tsf = EnvFlagEnabled("DRC_TSF_RELATIVE");
++    if (use_relative_tsf) {
++      GetMonotonicTsf(&relative_base);
++    }
++    env_checked = true;
++  }
++
++  if (use_boottime_offset_tsf) {
++    u64 boottime_us;
++    GetBoottimeUs(&boottime_us);
++    if (boottime_offset_us < 0) {
++      *tsf = boottime_us + static_cast<u64>(-boottime_offset_us);
++      return 0;
++    }
++    u64 positive_offset = static_cast<u64>(boottime_offset_us);
++    if (boottime_us >= positive_offset) {
++      *tsf = boottime_us - positive_offset;
++      return 0;
++    }
++  }
++
++  if (use_iwlmvm_tsf) {
++    std::string drc_if;
++    if (GetInterfaceOfIpv4("192.168.1.10", &drc_if) == 0 &&
++        GetIwlmvmDeviceTime(drc_if, tsf)) {
++      return 0;
++    }
++  }
++
++  if (use_relative_tsf) {
++    u64 now;
++    GetMonotonicTsf(&now);
++    *tsf = now - relative_base;
++    return 0;
++  }
+ 
+   if (fd == -1) {
+     std::string drc_if;
+@@ -89,11 +249,13 @@ int GetTsf(u64 *tsf) {
+     }
+ 
+     if (fd == -1) {
+-      return -1;
++      GetMonotonicTsf(tsf);
++      return 0;
+     }
+   }
+   if (pread(fd, tsf, sizeof (*tsf), 0) != sizeof (*tsf)) {
+     perror("pread failed - GetTsf");
++    GetMonotonicTsf(tsf);
+   }
+   return 0;
+ }
+diff --git a/src/udp.cpp b/src/udp.cpp
+index 904c712..0bea8d7 100644
+--- a/src/udp.cpp
++++ b/src/udp.cpp
+@@ -38,6 +38,11 @@ namespace drc {
+ 
+ namespace {
+ 
++bool EnvFlagEnabled(const char* name) {
++  const char* value = getenv(name);
++  return value != NULL && value[0] != '\0' && value[0] != '0';
++}
++
+ // Pre-swaps the port to convert it to network format.
+ bool ParseBindAddress(const std::string& bind_addr, in_addr* addr, u16* port) {
+   size_t pos = bind_addr.find_last_of(':');
+@@ -55,6 +60,35 @@ bool ParseBindAddress(const std::string& bind_addr, in_addr* addr, u16* port) {
+   return true;
+ }
+ 
++bool BindMediaSourcePortIfRequested(int sock_fd, u16 dst_port_network_order) {
++  if (!EnvFlagEnabled("DRC_BIND_MEDIA_SOURCE_PORTS")) {
++    return true;
++  }
++
++  u16 dst_port = ntohs(dst_port_network_order);
++  u16 src_port = 0;
++  if (dst_port == 50120) {
++    src_port = 50020;
++  } else if (dst_port == 50121) {
++    src_port = 50021;
++  } else {
++    return true;
++  }
++
++  int one = 1;
++  setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof (one));
++#ifdef SO_REUSEPORT
++  setsockopt(sock_fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof (one));
++#endif
++
++  sockaddr_in sin;
++  memset(&sin, 0, sizeof (sin));
++  sin.sin_family = AF_INET;
++  sin.sin_addr.s_addr = inet_addr("192.168.1.10");
++  sin.sin_port = htons(src_port);
++  return bind(sock_fd, reinterpret_cast<sockaddr*>(&sin), sizeof (sin)) != -1;
++}
++
+ }  // namespace
+ 
+ UdpClient::UdpClient(const std::string& dst_addr)
+@@ -79,6 +113,12 @@ bool UdpClient::Start() {
+     return false;
+   }
+ 
++  if (!BindMediaSourcePortIfRequested(sock_fd_,
++                                      dst_addr_parsed_.sin_port)) {
++    Stop();
++    return false;
++  }
++
+   return true;
+ }
+ 
+diff --git a/src/video-converter.cpp b/src/video-converter.cpp
+index 114cd65..abdf492 100644
+--- a/src/video-converter.cpp
++++ b/src/video-converter.cpp
+@@ -165,7 +165,7 @@ SwsContext* VideoConverter::GetContextForParams(
+ 
+   SwsContext* ctx = sws_getCachedContext(ctxs_[params],
+       width, height, ConvertPixFmt(pixfmt),
+-      target_w, target_h, PIX_FMT_YUV420P,
++      target_w, target_h, AV_PIX_FMT_YUV420P,
+       SWS_FAST_BILINEAR, NULL, NULL, NULL);
+ 
+   ctxs_[params] = ctx;
+diff --git a/src/video-streamer.cpp b/src/video-streamer.cpp
+index afff6c6..dec4294 100644
+--- a/src/video-streamer.cpp
++++ b/src/video-streamer.cpp
+@@ -24,6 +24,7 @@
+ 
+ #include <algorithm>
+ #include <cstdio>
++#include <cstdlib>
+ #include <drc/internal/astrm-packet.h>
+ #include <drc/internal/h264-encoder.h>
+ #include <drc/internal/tsf.h>
+@@ -44,6 +45,15 @@ s32 GetTimestamp() {
+   return static_cast<s32>(tsf & 0xFFFFFFFF);
+ }
+ 
++int GetEnvInt(const char* name, int fallback) {
++  const char* value = getenv(name);
++  if (value == nullptr || value[0] == '\0') {
++    return fallback;
++  }
++  int parsed = atoi(value);
++  return parsed > 0 ? parsed : fallback;
++}
++
+ void GenerateVstrmPackets(std::vector<VstrmPacket>* vstrm_packets,
+                           const H264ChunkArray& chunks, u32 timestamp,
+                           bool idr, bool* vstrm_inited, u16* vstrm_seqid) {
+@@ -161,21 +171,39 @@ void VideoStreamer::ResyncStream() {
+ 
+ void VideoStreamer::InitEventsAndRun() {
+   bool resync_requested = false;
+-  resync_evt_ = NewTriggerableEvent([&](Event*) {
+-    resync_requested = true;
+-    return true;
+-  });
+-
++  bool force_reinit_requested = false;
+   std::vector<byte> encoding_frame;
+ 
+   bool vstrm_inited = false;
+   u16 vstrm_seqid = 0;
+   std::vector<VstrmPacket> vstrm_packets;
+   bool send_idr = false;
++  int frames_since_reinit = 0;
++  int reinit_interval = GetEnvInt("DRC_VIDEO_REINIT_INTERVAL_FRAMES", 0);
++  int frames_since_forced_reinit = 1000000;
++  int reinit_on_resync = GetEnvInt("DRC_REINIT_ON_RESYNC", 0);
++  int reinit_cooldown = GetEnvInt("DRC_REINIT_COOLDOWN_FRAMES", 30);
++
++  resync_evt_ = NewTriggerableEvent([&](Event*) {
++    resync_requested = true;
++    if (reinit_on_resync > 0) {
++      force_reinit_requested = true;
++    }
++    return true;
++  });
+ 
+   AstrmPacket astrm_packet;
+   s32 next_timestamp = GetTimestamp();
+   TimerEvent* timer_evt = NewTimerEvent(1, [&](Event*) {
++    if (force_reinit_requested &&
++        frames_since_forced_reinit >= reinit_cooldown) {
++      vstrm_inited = false;
++      vstrm_seqid = 0;
++      vstrm_packets.clear();
++      frames_since_forced_reinit = 0;
++      force_reinit_requested = false;
++    }
++
+     if (vstrm_inited) {
+       astrm_client_->Send(astrm_packet.GetBytes(), astrm_packet.GetSize());
+       for (const auto& pkt : vstrm_packets) {
+@@ -190,6 +218,12 @@ void VideoStreamer::InitEventsAndRun() {
+     s32 timestamp = GetTimestamp();
+     LatchOnCurrentFrame(&encoding_frame);
+     if (encoding_frame.size() > 0) {
++      if (reinit_interval > 0 && frames_since_reinit >= reinit_interval) {
++        vstrm_inited = false;
++        vstrm_seqid = 0;
++        resync_requested = true;
++        frames_since_reinit = 0;
++      }
+       send_idr = resync_requested || !vstrm_inited;
+       const H264ChunkArray& chunks = encoder_->Encode(encoding_frame, send_idr);
+       GenerateVstrmPackets(&vstrm_packets, chunks, timestamp, send_idr,
+@@ -198,6 +232,8 @@ void VideoStreamer::InitEventsAndRun() {
+ 
+       vstrm_inited = true;
+       resync_requested = false;
++      frames_since_reinit++;
++      frames_since_forced_reinit++;
+     }
+ 
+     timestamp = GetTimestamp();

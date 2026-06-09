@@ -1,0 +1,4 @@
+patches/libdrc_success_minimal.patch
+patches/pad_probe_screen_demo.patch
+patches/0001-add-wii-u-gamepad-pc-success-fixes.patch
+patches/libdrc_full_working_tree.patch
