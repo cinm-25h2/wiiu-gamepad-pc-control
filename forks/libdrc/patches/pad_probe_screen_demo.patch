@@ -1,0 +1,74 @@
+--- /tmp/padprobe_orig/apps/pad_probe/main.cpp	2026-06-07 19:59:18.000000000 +0000
++++ /root/wiiu-drc/starter/apps/pad_probe/main.cpp	2026-06-08 10:02:17.690660922 +0000
+@@ -14,6 +14,7 @@
+ #include <cmath>
+ #include <csignal>
+ #include <cstdint>
++#include <cstdlib>
+ #include <iomanip>
+ #include <iostream>
+ #include <sstream>
+@@ -147,13 +148,27 @@
+          std::abs(a.ts_pressure - b.ts_pressure) > eps;
+ }
+ 
++std::string Endpoint(const std::string& host, const char* port) {
++  return host + ":" + port;
++}
++
+ }  // namespace
+ 
+ int main() {
+   std::signal(SIGINT, HandleSignal);
+   std::signal(SIGTERM, HandleSignal);
++  std::cout.setf(std::ios::unitbuf);
++  std::cerr.setf(std::ios::unitbuf);
+ 
+-  drc::Streamer streamer;
++  const char* gamepad_ip_env = std::getenv("DRC_GAMEPAD_IP");
++  const std::string gamepad_ip =
++      (gamepad_ip_env != nullptr && gamepad_ip_env[0] != '\0')
++          ? gamepad_ip_env
++          : "192.168.1.11";
++
++  drc::Streamer streamer(Endpoint(gamepad_ip, "50120"),
++                         Endpoint(gamepad_ip, "50121"),
++                         Endpoint(gamepad_ip, "50123"));
+   if (!streamer.Start()) {
+     std::cerr << "Failed to start libdrc streamer. Check IP setup, TSF, "
+                  "hostapd, DHCP, and whether the GamePad is connected.\n";
+@@ -161,19 +176,33 @@
+   }
+ 
+   streamer.SetTSArea(drc::kScreenWidth, drc::kScreenHeight);
++  const bool initial_sync_ok = streamer.SyncUICConfig(true);
++  const bool initial_backlight_ok = streamer.SetLcdBacklight(4, true);
+ 
+-  std::cout << "Started. Press Ctrl+C to stop.\n";
++  std::cout << "Started. GamePad IP target is " << gamepad_ip
++            << ". Press Ctrl+C to stop.\n";
++  std::cout << "Initial SyncUICConfig(wait=true)="
++            << (initial_sync_ok ? "ok" : "failed")
++            << " SetLcdBacklight(wait=true)="
++            << (initial_backlight_ok ? "ok" : "failed") << "\n";
+ 
+   drc::InputData current;
+   drc::InputData previous;
+   bool had_valid_input = false;
+   int tick = 0;
++  int resync_count = 0;
+ 
+   while (g_running) {
+     std::vector<drc::u8> frame = MakeTestFrame(tick++);
+     streamer.PushVidFrame(&frame, drc::kScreenWidth, drc::kScreenHeight,
+                           drc::PixelFormat::kBGRA);
+ 
++    if ((tick % 60) == 1) {
++      streamer.SyncUICConfig();
++      streamer.SetLcdBacklight(4);
++      std::cout << "resync " << ++resync_count << " sent\n";
++    }
++
+     streamer.PollInput(&current);
+     if (current.valid) {
+       if (!had_valid_input || InputChangedEnough(current, previous)) {

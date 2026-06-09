@@ -1,0 +1,98 @@
+{
+  "repository": "cinm-25h2/wiiu-gamepad-pc-control",
+  "policy": "Keep the control-panel wrapper, upstream fork patch stacks, and runtime-only machine secrets separate.",
+  "published_branch_namespace": "fork/",
+  "components": [
+    {
+      "id": "libdrc",
+      "label": "libdrc Wii U GamePad runtime fork",
+      "upstream": {
+        "name": "memahaxx/libdrc",
+        "url": "https://bitbucket.org/memahaxx/libdrc"
+      },
+      "runtime_path": "/root/wiiu-drc/third_party/libdrc",
+      "fork_directory": "forks/libdrc",
+      "github_branch": "fork/libdrc-wiiu-gamepad-pc",
+      "patches": [
+        "patches/libdrc_success_minimal.patch",
+        "patches/libdrc_full_working_tree.patch",
+        "patches/0001-add-wii-u-gamepad-pc-success-fixes.patch",
+        "patches/pad_probe_screen_demo.patch"
+      ],
+      "purpose": [
+        "Ubuntu 24.04 build fixes",
+        "signed TSF override/fallback support",
+        "UDP media source-port binding",
+        "touchscreen X-axis division fix",
+        "pad_probe diagnostics"
+      ]
+    },
+    {
+      "id": "pc2drc-drcvncclient",
+      "label": "pc2drc drcvncclient VNC streamer fork",
+      "upstream": {
+        "name": "pc2drc/libdrc-vnc/drcvncclient",
+        "url": "unknown-local-snapshot"
+      },
+      "runtime_path": "/root/wiiu-drc/pc2drc/libdrc-vnc/drcvncclient",
+      "fork_directory": "forks/pc2drc-drcvncclient",
+      "github_branch": "fork/pc2drc-drcvncclient-wiiu-gamepad-pc",
+      "patches": [
+        "patches/0001-pc2drc-ubuntu24-wiiu-gamepad-vnc-success.patch",
+        "patches/pc2drc_drcvncclient_ubuntu24_success.patch"
+      ],
+      "purpose": [
+        "current libdrc API compatibility",
+        "libswscale link fix",
+        "864x480 row-by-row frame copy",
+        "touch mapping to actual VNC client size"
+      ]
+    },
+    {
+      "id": "drc-hostap",
+      "label": "drc-hostap AP/WPS runtime integration",
+      "upstream": {
+        "name": "memahaxx/drc-hostap",
+        "url": "https://bitbucket.org/memahaxx/drc-hostap"
+      },
+      "runtime_path": "/root/wiiu-drc/third_party/drc-hostap",
+      "fork_directory": "forks/drc-hostap",
+      "github_branch": "fork/drc-hostap-wiiu-gamepad-pc",
+      "patches": [],
+      "scripts": [
+        "scripts/restart_wiiu_ap_keepalive.sh",
+        "scripts/pair_gamepad_pc_wps_experimental.sh",
+        "scripts/pair_or_switch_wiiu_gamepad.sh"
+      ],
+      "purpose": [
+        "normal Wii U DRC AP generation from local get_psk.conf",
+        "Intel LAR/IR-concurrent AP bring-up guardrails",
+        "experimental PC-hosted WPS pairing AP"
+      ]
+    },
+    {
+      "id": "control-wrapper",
+      "label": "local control GUI and orchestration",
+      "upstream": {
+        "name": "new wrapper",
+        "url": "https://github.com/cinm-25h2/wiiu-gamepad-pc-control"
+      },
+      "runtime_path": "/root/wiiu-drc",
+      "github_branch": "main",
+      "scripts": [
+        "wiiu_drc_gui.py",
+        "scripts/start_gui.sh",
+        "scripts/run_wiiu_gamepad_screen_success.sh",
+        "scripts/start_drcvnc_success.sh",
+        "scripts/watch_drcvnc_success.sh",
+        "scripts/wiiu_gamepad_status.sh"
+      ],
+      "purpose": [
+        "safe web GUI",
+        "AP and GamePad reconnect flow",
+        "desktop stream startup",
+        "status and watchdog automation"
+      ]
+    }
+  ]
+}

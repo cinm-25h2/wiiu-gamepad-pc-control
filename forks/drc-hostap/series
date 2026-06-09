@@ -1,0 +1,3 @@
+scripts/restart_wiiu_ap_keepalive.sh
+scripts/pair_or_switch_wiiu_gamepad.sh
+scripts/pair_gamepad_pc_wps_experimental.sh

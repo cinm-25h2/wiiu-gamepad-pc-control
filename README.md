@@ -118,6 +118,8 @@ The `patches/` directory contains the working changes used during the Ubuntu 24.
 - `Streamer::SetTSArea` floating-point division fix for the touchscreen X axis.
 - Touch mapping to the actual VNC client size.
 
+For the upstream/fork split, see `docs/third_party_forks.md` and `forks/manifest.json`. The intended published branch namespace is `fork/`, with separate entries for libdrc, pc2drc/drcvncclient, and drc-hostap integration.
+
 ## Known Good Runtime
 
 ```bash
